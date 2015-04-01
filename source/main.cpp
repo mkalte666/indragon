@@ -1,6 +1,10 @@
 #include "../include/MyoCpp.hpp"
 #include <fann.h>
 #include <chrono>
+#include <cstdlib>
+
+
+void EventWorker(int event);
 
 int main(int argc, char** argv)
 {
@@ -18,21 +22,32 @@ int main(int argc, char** argv)
 			
 	int mode = 0; //0=input, 1=tainGesture, 2=readGesture
 	int toTrain = 0;
+	
 	std::thread worker([&toTrain,&mutex,&mode,&emgData,&imuData](void) {
 		//NNetwork n(18,1);
-		fann *n = fann_create_standard(5,18,4000,2000,100,10);
+		int toStore = 2; //dont  possible
+		std::vector<float> historicalData(toStore*18,0.0);
+		fann *n = fann_create_from_file("data.dat");
+		if(n==NULL) {
+			n = fann_create_standard(3,18,2000,10);
+		}
 		fann_set_activation_function_hidden(n, FANN_SIGMOID_SYMMETRIC);
 		//fann_set_training_algorithm(n,FANN_TRAIN_QUICKPROP);
 		fann_set_learning_rate(n,0.1);
 		while(mode!=99) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(17));
 			mutex.lock();
 			std::vector<float> in = emgData;	
 			in.insert(in.end(), imuData.begin(), imuData.end());
+			
+			//std::cout << std::endl;
+			historicalData.insert(historicalData.begin(),in.begin(),in.end());
+			historicalData.resize(18*toStore);
 			mutex.unlock();
 			//clamp 
 			int i = 0;
 			for(;i<8;i++) {
-				in[i] = in[i] *.001;
+				in[i] = in[i]*.001;
 			}
 			for(;i<12;i++) {
 				in[i] = in[i]*.0001;
@@ -43,7 +58,10 @@ int main(int argc, char** argv)
 			for(;i<18;i++) {
 				in[i] = in[i]/360.0;
 			}
-	
+			/*for(auto s : in) {
+				std::cout << s << ",";
+			}
+			std::cout << std::endl;*/	
 			switch(mode) {
 			case 0:
 				break;
@@ -61,7 +79,7 @@ int main(int argc, char** argv)
 					}
 					std::cout << ")" << std::endl; 
 					fann_train(n, in.data(), expectedOutput.data());
-					std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					
 				}
 			case 2:
 				{			
@@ -80,10 +98,16 @@ int main(int argc, char** argv)
 						}
 					}	
 					std::cout << "DETECTED: " << b << std::endl;
+					if(mode!=1) {
+						EventWorker(b);
+					} 
 				break;
 				}
+			case 3:
+				fann_save(n,"data.dat");
+				mode = 2;
+				break;
 			default:
-				return;
 				break;
 			}
 			
@@ -113,7 +137,7 @@ int main(int argc, char** argv)
 		int in;
 		std::cin >> in;
 		if(in==toTrain) {
-			mode = 2;
+			mode = 3;
 			toTrain = 0;
 		}
 		else if(in>0&&in>9) {
@@ -126,4 +150,20 @@ int main(int argc, char** argv)
 	}
 	worker.join();
 	return 0;
+}
+
+void EventWorker(int event)
+{
+	static int lastEvent = 0;
+	float minEventTime = 0.4f;
+	static auto tBeg = std::chrono::high_resolution_clock::now();
+		if(lastEvent!=event && std::chrono::duration<float>(std::chrono::high_resolution_clock::now() - tBeg).count() > minEventTime) {
+			tBeg = std::chrono::high_resolution_clock::now();
+			lastEvent = event;
+			std::cout << "RAISED EVENT: " << event << std::endl << std::endl;
+			if(event==5) {
+				system("xdotool key XF86AudioMute");
+
+			}	
+	}
 }
